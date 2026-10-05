@@ -1,0 +1,6 @@
+{
+  "name": "hyperspace",
+  "description": "X-wing / TIE spinner for Claude Code",
+  "owner": { "name": "alexregrets" },
+  "plugins": [{ "name": "hyperspace", "source": "./" }]
+}
