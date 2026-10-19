@@ -1,9 +1,17 @@
 {
   "name": "hyperspace",
-  "version": "0.2.0",
-  "description": "Spinner mod: an X-wing or a TIE fighter flies through a parallax starfield while Claude works, with laser volleys and a hyperspace jump every 24 s. /ship switches the ship.",
-  "author": { "name": "alexregrets" },
+  "version": "0.3.0",
+  "description": "Spinner mod: a real 3D space battle in terminal quarter-blocks while Claude works. Six ships, a cutting camera, torpedoes and a cinematic hyperspace jump. /ship and /cam switch them.",
+  "author": {
+    "name": "alexregrets"
+  },
   "repository": "https://github.com/alexregrets/hyperspace",
   "license": "MIT",
-  "keywords": ["mod", "spinner", "star-wars", "animation", "raster"]
+  "keywords": [
+    "mod",
+    "spinner",
+    "star-wars",
+    "animation",
+    "raster"
+  ]
 }
