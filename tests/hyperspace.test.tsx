@@ -1,6 +1,8 @@
 import { test, expect, mock } from 'claude-code/testing'
 
-import { CAMS, cameraAt, frame, hyper, jumpTime, killsAt, ROWS, SHIPS } from '../hooks/frame'
+import { toWorld } from '../hooks/three'
+
+import { CAMS, cameraAt, frame, flightAt, r2At, hyper, jumpPose, jumpTime, JUMP_LEN, killsAt, ROWS, SHIPS } from '../hooks/frame'
 
 // декодировать клетку кадра в символ
 const charAt = (cells: Uint32Array, columns: number, x: number, row: number) =>
@@ -40,6 +42,22 @@ test('звёзды двигаются, камера режет планы, пр�
 })
 
 test('прыжок как в кино: туннель заливает кадр, после выхода снова космос', async () => {
+  // Рывок действительно уводит корабль вдаль и сжимает его перед вспышкой.
+  const departing = jumpPose(14_500), point = jumpPose(14_690)
+  expect(departing.stretch).toBeGreaterThan(1)
+  expect(point.forward).toBeGreaterThan(departing.forward + 200)
+  expect(point.scale).toBeLessThan(0.15)
+  // После выходной вспышки корабль приходит из точки, слегка перелетает и тормозит.
+  expect(jumpPose(20_250).forward).toBeGreaterThan(500)
+  expect(jumpPose(20_800).forward).toBeLessThan(30)
+  expect(jumpPose(21_100).forward).toBeLessThan(0)
+  expect(jumpPose(21_400).forward).toBe(0)
+  expect(jumpTime(12_000 + JUMP_LEN)).toBe(-1)
+  // Пул буферов и порядок рендера не должны менять один и тот же кадр; только BMP.
+  const saved = Array.from(frame(14_500, 72, 'xwing', 'auto', { res: 'quad' }))
+  frame(20_700, 200, 'falcon')
+  expect(Array.from(frame(14_500, 72, 'xwing', 'auto', { res: 'quad' }))).toEqual(saved)
+  expect(saved.filter((_, i) => i % 3 === 0).every(cp => cp <= 0xffff)).toBe(true)
   const cols = 72
   const cellsOf = (t: number) => {
     const c = frame(t, cols, 'xwing')
@@ -85,4 +103,24 @@ test('в терминале рисуется сцена, на десктопе �
   const desk = await $.ui.mount({ plugin: 'hyperspace', surface: 'desktop', component: 'Spinner', props })
   expect(engineWord).not.toBe('Sauteing')
   await desk.unmount()
+})
+
+test('кинематика: нос следует траектории, уклонение плавное, R2 стабилизирует голову', async () => {
+  for (const t of [900, 1_200, 1_500, 1_900, 2_050, 6_700]) {
+    const a = flightAt(t - 1, true), b = flightAt(t + 1, true), o = flightAt(t, true)
+    const nose = toWorld([1, 0, 0], o).map((v, i) => v - o.pos[i]!)
+    const v = [0.06, b.pos[1] - a.pos[1], b.pos[2] - a.pos[2]]
+    const dot = nose.reduce((sum, n, i) => sum + n * v[i]!, 0) / Math.hypot(...v)
+    expect(dot).toBeGreaterThan(0.999)
+  }
+  for (const edge of [1_150, 2_100]) {
+    const a = flightAt(edge - 1, true), b = flightAt(edge + 1, true)
+    expect(Math.abs(a.roll - b.roll)).toBeLessThan(0.01)
+  }
+  // Поворот головы компенсирует поворот корпуса, а наклон остаётся в пределах подвеса.
+  const level = r2At(1_500, { yaw: 0, pitch: 0 })
+  const tilted = r2At(1_500, { yaw: 0.2, pitch: 0.1 })
+  expect(tilted.head).toBeLessThan(level.head)
+  expect(tilted.brace).toBeLessThan(level.brace)
+  for (const t of [1_500, 14_500, 17_000, 20_400]) expect(Math.abs(r2At(t).brace)).toBeLessThan(0.17)
 })

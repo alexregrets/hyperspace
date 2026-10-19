@@ -71,7 +71,7 @@ const HULL = 0xd9d6cf, HULL2 = 0xb9b6ae, GREY = 0x8a8c90, DARK = 0x45484e, GLASS
 const RED = 0xc23a2e, YELLOW = 0xd9a520, R2BLUE = 0x2f5fc4, TIEPANEL = 0x3a404c, TIEFRAME = 0x8a909a, TIEGREY = 0x858a94
 
 // X-wing: open — угол раскрытия S-foil в радианах
-export function xwing(open: number): Mesh {
+export function xwing(open: number, headYaw = 0, headBrace = 0): Mesh {
   const m = new Mesh()
   // фюзеляж: короб сзади, длинный клин носа, красные полосы на носу
   m.beam([-6, 0, 0, 0.75, 0.8], [-1.2, 0, 0, 0.85, 0.85], HULL, GREY)
@@ -81,9 +81,30 @@ export function xwing(open: number): Mesh {
   // кабина: тёмный фонарь с перемычкой
   m.beam([-1.6, 0.95, 0, 0.12, 0.55], [1.4, 0.6, 0, 0.05, 0.35], GLASS)
   m.box(-0.3, -0.1, 0.8, 1.15, -0.5, 0.5, GREY)
-  // R2 за кабиной: синий купол
-  m.lathe(1, [-2.6, 0.85, 0], [[0.42, 0], [0.42, 0.25], [0.3, 0.5], [0, 0.58]], 8, 0xdfe4ea)
-  m.box(-2.75, -2.45, 1.15, 1.32, -0.18, 0.18, R2BLUE)
+  // R2-D2 утоплен в гнездо за фонарём: видны плечи и купол, ноги внутри фюзеляжа.
+  // Крупные синие панели и тёмный глаз читаются и после четвертьблоков.
+  m.lathe(1, [-2.6, 0.82, 0], [[0.57, 0], [0.57, 0.12], [0.49, 0.16]], 10, DARK)
+  m.lathe(1, [-2.6, 0.96, 0], [[0.47, 0], [0.47, 0.38]], 10, 0xe3e6e8)
+  m.box(-2.14, -2.1, 1.01, 1.28, -0.25, 0.25, R2BLUE)
+  m.box(-3.1, -3.06, 1.04, 1.2, -0.3, 0.3, R2BLUE)
+  const headMark = m.mark()
+  m.lathe(1, [0, 0, 0], [[0.5, 0], [0.5, 0.12], [0.46, 0.3], [0.32, 0.48], [0.001, 0.55]], 12, 0xbfcbd6)
+  m.lathe(1, [0, 0, 0], [[0.505, 0], [0.505, 0.1]], 12, R2BLUE)
+  // Четыре широких сектора на куполе; без мелких точек и случайного блеска.
+  for (let i = 0; i < 4; i++) {
+    const a = i * Math.PI / 2 + 0.18, b = a + 0.7
+    const ring = (r: number, y: number, th: number): V => [r * Math.cos(th), y, r * Math.sin(th)]
+    m.quad(ring(0.465, 0.3, a), ring(0.465, 0.3, b), ring(0.325, 0.48, b), ring(0.325, 0.48, a), R2BLUE)
+  }
+  m.box(0.38, 0.51, 0.16, 0.36, -0.24, 0.24, R2BLUE) // рамка основного глаза
+  m.box(0.5, 0.55, 0.18, 0.34, -0.15, 0.15, 0x08121e) // оптика, не светящийся фонарь
+  m.box(-0.52, -0.47, 0.13, 0.28, -0.15, 0.15, 0x273c69) // задний проектор
+  m.map(headMark, ([x, y, z]) => {
+    const co = Math.cos(headYaw), si = Math.sin(headYaw)
+    const hx = x * co + z * si, hz = -x * si + z * co
+    const cb = Math.cos(headBrace), sb = Math.sin(headBrace)
+    return [-2.6 + hx * cb - y * sb, 1.34 + hx * sb + y * cb, hz]
+  })
   // четыре крыла: строятся справа-сверху, потом наклоняются и отражаются
   for (const up of [1, -1]) for (const side of [1, -1]) {
     const k = m.mark()

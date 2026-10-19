@@ -5,7 +5,7 @@
 
 import {
   xwing, ywing, awing, tie, interceptor, falcon, destroyer, asteroid,
-  Scene, project, toWorld, camPos, camDirToWorld, type Cam, type Light, type Mesh, type Obj, type V,
+  Scene, project, toWorld, camPos, camDirToWorld, type Cam, type Light, Mesh, type Obj, type V,
 } from './three.ts'
 
 export const ROWS = 12 // строк терминала под сцену
@@ -38,8 +38,9 @@ const lerpV = (a: V, b: V, k: number): V => [lerp(a[0], b[0], k), lerp(a[1], b[1
 
 // ── меши: X-wing складывает крылья, остальные постоянные ──
 const meshes = new Map<string, Mesh>()
-function meshOf(ship: Ship | 'destroyer' | `rock${number}`, open = 0.24): Mesh {
-  const key = ship === 'xwing' ? `x${Math.round(open * 40)}` : ship
+function meshOf(ship: Ship | 'destroyer' | `rock${number}`, open = 0.24, head = 0, brace = 0): Mesh {
+  const headStep = Math.round(head * 8), braceStep = Math.round(brace * 16)
+  const key = ship === 'xwing' ? `x${Math.round(open * 40)}:${headStep}:${braceStep}` : ship
   if (ship.startsWith('rock')) {
     let r = meshes.get(key)
     if (!r) meshes.set(key, (r = asteroid(Number(ship.slice(4)))))
@@ -47,8 +48,9 @@ function meshOf(ship: Ship | 'destroyer' | `rock${number}`, open = 0.24): Mesh {
   }
   let m = meshes.get(key)
   if (!m) {
-    m = ship === 'xwing' ? xwing(Math.round(open * 40) / 40) : ship === 'ywing' ? ywing() : ship === 'awing' ? awing()
+    m = ship === 'xwing' ? xwing(Math.round(open * 40) / 40, headStep / 8, braceStep / 16) : ship === 'ywing' ? ywing() : ship === 'awing' ? awing()
       : ship === 'falcon' ? falcon() : ship === 'tie' ? tie() : ship === 'interceptor' ? interceptor() : destroyer()
+    if (meshes.size >= 128) meshes.clear()
     meshes.set(key, m)
   }
   return m
@@ -57,11 +59,11 @@ function meshOf(ship: Ship | 'destroyer' | `rock${number}`, open = 0.24): Mesh {
 // ── прыжок в гиперпространство: тайминг фаз, мс от начала прыжка ──
 const FIRST_JUMP = 12_000 // сначала бой, потом прыжок
 const JUMP_EVERY = 34_000
-const CHARGE = 1_500 // разгон: движки греются, тряска, звёзды начинают тянуться
-const STRETCH = 2_600 // звёзды — лучи до упора
-const FLASH = 2_900 // белая вспышка → туннель
-const EXIT = 7_600 // вспышка выхода, лучи стягиваются в точки
-export const JUMP_LEN = 9_000
+const CHARGE = 1_300 // подготовка, затем ускоряющийся рост лучей
+const STRETCH = 2_350 // камера остаётся, корабль уходит вдаль за 350 мс
+const FLASH = 2_700 // точка → короткая белая вспышка → туннель
+const EXIT = 8_200 // разрыв туннеля; лучи сжимаются за 520 мс
+export const JUMP_LEN = 10_000
 
 // мс от начала прыжка или −1
 export const jumpTime = (t: number) => {
@@ -69,23 +71,68 @@ export const jumpTime = (t: number) => {
   const p = (t - FIRST_JUMP) % JUMP_EVERY
   return p < JUMP_LEN ? p : -1
 }
-// сила прыжка 0..1
 export const hyper = (t: number) => {
   const p = jumpTime(t)
   if (p < 0) return 0
-  if (p < CHARGE) return 0.3 * (p / CHARGE)
-  if (p < FLASH) return 0.3 + 0.7 * ease((p - CHARGE) / (FLASH - CHARGE))
+  if (p < FLASH) return Math.pow(clamp01(p / STRETCH), 3)
   if (p < EXIT) return 1
-  return 1 - ease((p - EXIT) / (JUMP_LEN - EXIT))
+  return 1 - ease((p - EXIT) / 700)
 }
-// длина лучей звёзд в единицах мира (скорость × выдержка «кадра плёнки»)
+// Доля радиального удлинения: рост ease-in, сжатие намного быстрее.
 const streakAt = (p: number) => {
-  if (p < 0) return 0.9
-  if (p < CHARGE) return 0.9 + 6 * ease(p / CHARGE)
-  if (p < FLASH) return 7 + 260 * Math.pow(ease((p - CHARGE) / (FLASH - CHARGE)), 2)
+  if (p < 0) return 0
+  if (p < FLASH) return Math.pow(clamp01((p - 350) / (STRETCH - 350)), 3)
   if (p < EXIT) return 0
-  return 260 * Math.pow(1 - ease((p - EXIT - 200) / (JUMP_LEN - EXIT - 900)), 2) + 0.9
+  return Math.pow(1 - clamp01((p - EXIT) / 520), 2)
 }
+
+// Только поза прыжка: модели не меняются. Дальность и сжатие дают уход в точку.
+export function jumpPose(t: number) {
+  const p = jumpTime(t)
+  let forward = 0, scale = 1, stretch = 1, point = 0
+  if (p >= STRETCH && p < FLASH + 650) {
+    const q = p < FLASH ? clamp01((p - STRETCH) / (FLASH - STRETCH)) : 1 - ease((p - FLASH - 120) / 530)
+    forward = 650 * q * q * q
+    scale = 1 - 0.94 * q * q
+    stretch = 1 + 4 * Math.sin(Math.PI * q)
+    point = ease((q - 0.65) / 0.35)
+  } else if (p >= EXIT) {
+    const q = clamp01((p - EXIT - 40) / 1_050)
+    forward = q === 1 ? 0 : 650 * Math.pow(1 - q, 5) - 448 * Math.pow(q * (1 - q), 3)
+    scale = 0.06 + 0.94 * (1 - Math.pow(1 - q, 3))
+    stretch = 1 + 3 * Math.sin(Math.PI * q) * (1 - q)
+    point = Math.pow(1 - q, 4)
+  }
+  return { forward, scale, stretch, point }
+}
+// Аналитическая кинематика: скорость — производная пути, никаких интеграторов и dt.
+// Корпус летит носом по касательной; крен отвечает боковому ускорению, а не отдельной синусоиде.
+export function flightAt(t: number, evading = false): Obj {
+  const u = t % 5_200, q = clamp01((u - 1_150) / 950)
+  const sn = Math.sin(Math.PI * q), cs = Math.cos(Math.PI * q)
+  const sign = Math.floor(t / 5_200) % 2 ? -1 : 1
+  const dodge = evading ? Math.pow(sn, 4) : 0
+  const dv = evading ? 4 * sn * sn * sn * cs * Math.PI / 950 : 0
+  const da = evading ? (12 * sn * sn * cs * cs - 4 * Math.pow(sn, 4)) * Math.pow(Math.PI / 950, 2) : 0
+  const y = 0.55 * Math.sin(t / 1_250) + 0.13 * Math.sin(t / 520) + dodge * 0.24
+  const z = 0.9 * Math.sin(t / 1_700) + 0.2 * Math.sin(t / 730) + sign * dodge * 1.2
+  const vy = 0.55 / 1_250 * Math.cos(t / 1_250) + 0.13 / 520 * Math.cos(t / 520) + dv * 0.24
+  const vz = 0.9 / 1_700 * Math.cos(t / 1_700) + 0.2 / 730 * Math.cos(t / 730) + sign * dv * 1.2
+  const az = -0.9 / (1_700 * 1_700) * Math.sin(t / 1_700) - 0.2 / (730 * 730) * Math.sin(t / 730) + sign * da * 1.2
+  const br = clamp01(((t + 21_000) % 24_000) / 1_400)
+  const barrel = br < 1 ? br * br * br * (10 + br * (-15 + 6 * br)) * Math.PI * 2 : 0
+  return { pos: [0, y, z], yaw: -Math.atan2(vz, 0.03), pitch: Math.atan2(vy, 0.03), roll: -Math.atan(az * 8_000) - barrel }
+}
+
+// Сервопривод головы: плавный обзор, фиксация по курсу при разгоне и затухающая стабилизация.
+export function r2At(t: number, attitude: Pick<Obj, 'yaw' | 'pitch'> = flightAt(t)) {
+  const p = jumpTime(t)
+  const charge = p >= 0 && p < FLASH ? ease(p / STRETCH) : 0
+  const braking = p >= EXIT ? Math.exp(-(p - EXIT) / 240) * Math.sin((p - EXIT) / 105) : 0
+  const scan = 0.65 * Math.sin(t / 2_600) + 0.18 * Math.sin(t / 970)
+  return { head: scan * (1 - charge) * (p >= FLASH && p < EXIT ? 0.3 : 1) - attitude.yaw * 0.6, brace: Math.max(-0.16, Math.min(0.16, -attitude.pitch * 0.7 - 0.1 * charge + 0.08 * braking)) }
+}
+
 // идёт ли прыжок где-то в отрезке [a, b]
 const jumpIn = (a: number, b: number) => {
   for (let x = a; x <= b; x += 250) if (jumpTime(x) >= 0) return true
@@ -147,7 +194,7 @@ function bodyColor(kind: number, nx: number, ny: number, seed: number): RGB {
 // ── камера: планы, монтаж по времени, ручная тряска ──
 type Shot = { azim: number; elev: number; dist: number; fy: number; tx: number; cx: number; drift: number }
 // прыжок: камера прямо за хвостом, точка схода по центру — как Сокол уходит в гипер в фильме
-const JUMP_SHOT: Shot = { azim: 1.5, elev: 0.1, dist: 21, fy: 2.9, tx: 1, cx: 0.5, drift: 0 }
+const JUMP_SHOT: Shot = { azim: Math.PI / 2, elev: 0.025, dist: 21, fy: 2.9, tx: 1, cx: 0.5, drift: 0 }
 const SHOTS: Record<Exclude<CamMode, 'auto'>, Shot> = {
   side: { azim: 0.42, elev: 0.22, dist: 34, fy: 2.67, tx: 1, cx: 0.3, drift: 0.12 }, // классика: идёт вправо, чуть от нас
   rear: { azim: 1.18, elev: 0.12, dist: 30, fy: 2.73, tx: 3, cx: 0.34, drift: 0.08 }, // из-за хвоста: видна точка, куда летим
@@ -169,15 +216,13 @@ export function cameraAt(t: number, mode: CamMode, PW: number, PH = ROWS * 2, sh
   const s = p >= 0 ? JUMP_SHOT : SHOTS[name]
   // ручная камера: медленный дрейф по плану + мелкая дрожь, на разгоне сильнее
   const hitShake = shakeUntil > t ? 0.05 * ((shakeUntil - t) / 450) : 0 // попадание по нам
-  const shake = (p > CHARGE * 0.3 && p < EXIT ? (p < FLASH ? 0.035 : 0.015) : 0.004) + hitShake
+  const shake = (p >= 0 ? (p < STRETCH ? 0.025 * Math.pow(p / STRETCH, 3) : p < FLASH ? 0.025 : 0.0015) : 0.004) + hitShake
   const jx = (noise(t / 140, 1) - 0.5) * shake, jy = (noise(t / 140, 7) - 0.5) * shake
-  // в прыжке камера отстаёт от корабля, а потом догоняет — рывок
-  const lag = p >= CHARGE && p < EXIT ? -6 * ease((p - CHARGE) / (FLASH - CHARGE)) + 6 * ease((p - FLASH) / 900) : 0
   const SY = PH / ROWS // пикселей на клетку по вертикали: 2 или 3
   const cockpit = name === 'cockpit' && p < 0
   const cam: Cam = {
-    target: [s.tx + lag, cockpit ? 0.95 : 0, 0], azim: s.azim + s.drift * (u - 0.5) + jx, elev: s.elev + jy,
-    roll: (cockpit ? Math.sin(t / 1300) * 0.2 : Math.sin(t / 2300) * 0.03) + jx * 0.5,
+    target: [s.tx, cockpit ? 0.95 : 0, 0], azim: s.azim + s.drift * (u - 0.5) + jx, elev: s.elev + jy,
+    roll: (p >= 0 ? 0 : cockpit ? Math.sin(t / 1300) * 0.2 : Math.sin(t / 2300) * 0.03) + jx * 0.5,
     dist: s.dist, fy: (s.fy * SY) / 2, ax: 4 / SY, cx: PW * s.cx, cy: PH / 2,
   }
   return { cam, name: p >= 0 ? 'jump' : name }
@@ -271,35 +316,40 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
   const theirLaser: RGB = imperial ? [1, 0.25, 0.18] : [0.35, 1, 0.4]
   const reach = Math.min(34, Math.max(16, (columns * 0.55) / 2.5)) // как далеко вперёд видно на этой ширине
 
-  const inTunnel = p >= FLASH - 100 && p < EXIT + 250
+  const inTunnel = p >= FLASH && p < EXIT + 80
   const scene = buf.scene
 
-  // ── 1. туннель: лучи из камеры в цилиндр вокруг курса, по стенкам бегут спиральные потоки ──
+  // ── 1. цилиндр: широкие облачные потоки, смаз вдоль курса, белый центр ──
   if (inTunnel) {
-    const tt = p - FLASH
-    const R = 14
-    const flick = hash(Math.floor(p / 170)) > 0.82 ? 0.35 : 0 // молнии в облаках
+    const tt = p - FLASH, R = 14
+    // Ортонормальный базис один раз на кадр. Ненормированный луч даёт тот же
+    // корень пересечения, экономя три поворота и hypot на каждом пикселе.
+    const right = camDirToWorld([1, 0, 0], cam), up = camDirToWorld([0, 1, 0], cam)
+    const forward = camDirToWorld([0, 0, -cam.dist], cam)
+    const invX = 1 / (cam.ax * cam.fy), invY = 1 / cam.fy
     for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
-      const d = camDirToWorld([(x + 0.5 - cam.cx) / (cam.ax * cam.fy), -(y + 0.5 - cam.cy) / cam.fy, -cam.dist], cam)
-      const dl = Math.hypot(d[0], d[1], d[2])
-      const wx = d[0] / dl, wy = d[1] / dl, wz = d[2] / dl
+      const sx = (x + 0.5 - cam.cx) * invX, sy = -(y + 0.5 - cam.cy) * invY
+      const wx = forward[0] + sx * right[0] + sy * up[0]
+      const wy = forward[1] + sx * right[1] + sy * up[1]
+      const wz = forward[2] + sx * right[2] + sy * up[2]
       const A = wy * wy + wz * wz, B = 2 * (cp[1] * wy + cp[2] * wz), C = cp[1] * cp[1] + cp[2] * cp[2] - R * R
-      let c: RGB
-      if (A < 1e-4) c = WHITE
-      else {
-        const s = (-B + Math.sqrt(Math.max(0, B * B - 4 * A * C))) / (2 * A)
-        const u = cp[0] + s * wx
-        const th = Math.atan2(cp[1] + s * wy, cp[2] + s * wz) + u * 0.006 // закрутка
-        const flow = u * 0.02 - tt * 0.0065
-        const n1 = noise(th * 2.6 + 10, flow)
-        const n2 = noise(th * 9, flow * 2.3 + 5)
-        const streak = hash(Math.floor((th + Math.PI) * 14)) > 0.8 ? Math.pow(noise(th * 14, flow * 3), 2) * 0.8 : 0
-        const fog = 1 - Math.exp(-s / 140) // дальше по курсу — светлее, к белому центру
-        c = tun(0.15 + Math.pow(n1, 2) * 0.55 + n2 * 0.18 + streak + fog * 0.55 + flick * n1)
-      }
-      const k = p < FLASH ? ease((p - FLASH + 100) / 100) : 1
+      const distance = A < 1e-5 ? 2_000 : (-B + Math.sqrt(Math.max(0, B * B - 4 * A * C))) / (2 * A)
+      const u = Math.min(450, cp[0] + distance * wx)
+      const th = Math.atan2(cp[1] + distance * wy, cp[2] + distance * wz) + u * 0.002 + tt * 0.000065
+      // Плюс время: облака идут от большой глубины к камере, от центра к краям.
+      const flow = u * 0.026 + tt * 0.0045
+      // Три выдержки вдоль оси: продольный смаз без высокочастотных октав.
+      const angular = Math.cos(th) * 2.1 + 8
+      const cloud = (noise(angular, flow) + 2 * noise(angular, flow - 0.65) + noise(angular, flow - 1.3)) / 4
+      const cloudLight = ease((cloud - 0.25) / 0.5)
+      const bands = Math.pow(0.5 + 0.5 * Math.sin(th * 7 + 1.3 * Math.sin(th * 3) + cloud * 2), 3)
+      const trace = Math.pow(0.5 + 0.5 * Math.sin(th * 11 + Math.sin(th * 4) + u * 0.004), 18)
+      const pulse = 0.4 + 0.6 * noise(Math.sin(th) * 2 + 20, flow * 0.45)
+      const fog = 1 - Math.exp(-Math.max(0, u) / 105)
+      const c = tun(0.08 + fog * 0.78 + bands * (0.05 + cloudLight * 0.43) + trace * pulse * 0.25)
+      const core = Math.pow(fog, 8) * 1.5
       const o = (y * PW + x) * 3
-      rgb[o] = c[0] * k; rgb[o + 1] = c[1] * k; rgb[o + 2] = c[2] * k
+      rgb[o] = c[0] + core; rgb[o + 1] = c[1] + core; rgb[o + 2] = c[2] + core
     }
   }
 
@@ -327,29 +377,38 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
     }
   }
 
-  // ── 3. звёзды: точки в покое, лучи к точке схода в прыжке; пыль у камеры — чувство скорости ──
+  // ── 3. звёзды: точки в покое, лучи от точки схода в прыжке; пыль у камеры — чувство скорости ──
   const L = streakAt(p)
   if (!inTunnel) {
-    const shift = t * CRUISE + (p > EXIT ? 777 : 0) // после прыжка — новое небо
+    // В разгоне фиксируем исходные точки; после выхода новое небо больше не скачет назад.
+    const completed = t < FIRST_JUMP ? 0 : Math.floor((t - FIRST_JUMP) / JUMP_EVERY) + (p < 0 || p >= EXIT ? 1 : 0)
+    const starTime = p >= 0 && p < FLASH ? t - p : t
+    const shift = starTime * CRUISE + completed * 777
+    const vp = project([cp[0] + 10_000, cp[1], cp[2]], cam)!
+    const settle = p >= EXIT ? 0.045 * Math.sin((p - EXIT) / 80) * Math.exp(-(p - EXIT) / 240) : 0
     for (let i = 0; i < STARS.length; i++) {
       const st = STARS[i]!
       const x = ((((st.p[0] - shift) % 520) + 780) % 520) - 260
       const a = project([x, st.p[1], st.p[2]], cam)
       if (!a || a[0] < -40 || a[0] > PW + 40 || a[1] < -40 || a[1] > PH + 40) continue
-      const tw = 0.75 + 0.25 * noise(i, t / 400) // мерцание
-      const br = st.b * tw * (1 + h)
-      if (L < 1.5) { add(a[0], a[1], st.tint, br); continue }
-      if (st.b < 0.35 && i % 4) continue // в прыжке тянутся только яркие: иначе лучи сливаются в кашу
-      const b = project([x + L, st.p[1], st.p[2]], cam)
-      if (!b) continue
-      ray(a[0], a[1], b[0], b[1], mixC(st.tint, [0.75, 0.88, 1], 0.6), br * 0.9, 0)
+      const tw = 0.75 + 0.25 * noise(i, t / 400)
+      const near = clamp01(80 / a[2])
+      const br = st.b * tw * (1 + L * near * 2)
+      if (p < 0) { add(a[0], a[1], st.tint, br); continue }
+      const dx = a[0] - vp[0], dy = a[1] - vp[1]
+      const hx = a[0] + dx * settle, hy = a[1] + dy * settle
+      add(hx, hy, [0.85, 0.94, 1], br)
+      if (L < 0.004 || (st.b < 0.4 && i % 4)) continue
+      // Голова остаётся на звезде, гаснущий хвост растёт наружу строго по радиусу.
+      const len = L * (0.3 + 2.8 * near)
+      ray(hx, hy, hx + dx * len, hy + dy * len, [0.78, 0.9, 1], br * 0.65, 0)
     }
     // пыль: короткие штрихи, проносятся мимо камеры
     const dshift = t * CRUISE * 1.4
-    for (let i = 0; i < DUST.length; i++) {
+    for (let i = 0; i < (p < 0 ? DUST.length : 0); i++) {
       const d = DUST[i]!
       const x = ((((d[0] - dshift) % 80) + 120) % 80) - 40 + cam.target[0]
-      const a = project([x, d[1], d[2]], cam), b = project([x + 0.6 + L * 0.15, d[1], d[2]], cam)
+      const a = project([x, d[1], d[2]], cam), b = project([x + 0.735, d[1], d[2]], cam)
       if (!a || !b || a[2] > 45) continue
       ray(a[0], a[1], b[0], b[1], [0.6, 0.62, 0.68], 0.35, 0)
     }
@@ -372,16 +431,17 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
   const HIT = 2_700, BOOM = 1_900
 
   // поза игрока: крен, уклонение от огня, бочка, тряска и рывок в прыжке
-  const br = ((t + 21_000) % 24_000) / 1_400
-  const barrel = p < 0 && br < 1 ? ease(br) * Math.PI * 2 : 0
-  const dodge = fight && u > 1_150 && u < 2_000 ? Math.sin(((u - 1_150) / 850) * Math.PI) * 0.45 : 0
   const open = p < 0 ? 0.24 : p < CHARGE ? 0.24 * (1 - ease(p / CHARGE)) : p < EXIT ? 0 : 0.24 * ease((p - EXIT) / (JUMP_LEN - EXIT))
-  const jit = p > CHARGE * 0.3 && p < FLASH ? (noise(t / 60, 3) - 0.5) * 0.5 : 0
-  const lurch = p >= CHARGE && p < EXIT ? 5 * ease((p - CHARGE) / (FLASH - CHARGE)) * (1 - ease((p - FLASH) / 1200)) : 0
+  const pose = jumpPose(t)
+  // Перед прыжком автопилот гасит поперечную скорость и выводит корпус на курс.
+  const flight = flightAt(t, fight)
+  const align = p >= 0 ? 1 - ease(p / CHARGE) : 1
+  const settling = p >= EXIT ? Math.sin((p - EXIT) / 110) * Math.exp(-(p - EXIT) / 260) : 0
+  const vibration = p >= 0 && p < FLASH ? Math.pow(clamp01(p / STRETCH), 3) * 0.035 * Math.sin(t / 27) : 0
   const me: Obj = {
-    pos: [lurch, Math.sin(t / 650) * 0.25 + jit, jit * 0.5],
-    yaw: Math.sin(t / 1700) * 0.08, pitch: Math.sin(t / 900) * 0.04 + (p >= CHARGE && p < FLASH ? 0.05 : 0),
-    roll: Math.sin(t / 1300) * 0.2 + dodge - barrel,
+    pos: [pose.forward, flight.pos[1] * align + vibration, flight.pos[2] * align], scale: pose.scale,
+    yaw: flight.yaw * align, pitch: flight.pitch * align + settling * 0.035,
+    roll: p < 0 ? flight.roll : Math.atan2(Math.sin(flight.roll), Math.cos(flight.roll)) * align,
   }
   // свет от взрыва и от событий: подсвечивает корпуса рядом
   const lights: Light[] = []
@@ -406,10 +466,21 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
     }
   }
 
-  const myMesh = meshOf(ship, open)
+  const r2 = r2At(t, me)
+  let myMesh = meshOf(ship, open, r2.head, r2.brace)
+  if (pose.stretch > 1.001) {
+    const stretched = new Mesh()
+    // Растягиваем от хвоста вперёд: хвост не должен пересекать неподвижную камеру.
+    const tail = myMesh.tris.reduce((m, tri) => Math.min(m, tri.a[0], tri.b[0], tri.c[0]), Infinity)
+    const stretch = ([x, y, z]: V): V => [tail + (x - tail) * pose.stretch, y, z]
+    stretched.tris = myMesh.tris.map(tri => ({ ...tri, a: stretch(tri.a), b: stretch(tri.b), c: stretch(tri.c) }))
+    stretched.glows = myMesh.glows.map(g => ({ ...g, p: stretch(g.p) }))
+    stretched.guns = myMesh.guns.map(stretch)
+    myMesh = stretched
+  }
   const tunnelLit = p >= FLASH && p < EXIT
   // в туннеле корабль — тёмный силуэт с голубым контровым светом, как на фоне гиперпространства в кино
-  if (!cockpit) scene.draw(myMesh, me, cam, engine, blue, tunnelLit ? 0.5 : 1, tunnelLit ? [0.35, 0.75, 1.5] : undefined, lights)
+  if (!cockpit) scene.draw(myMesh, me, cam, engine, blue, tunnelLit ? 0.12 : 1, tunnelLit ? [0.15, 0.45, 1.1] : undefined, lights)
 
   let foeObj: Obj | null = null
   if (fight && u < HIT) {
@@ -440,6 +511,13 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
   }
   if (!cockpit) exhaust(myMesh, me, 1.6 + (tick === 1 ? 0.5 : 0) + h * 12)
   if (foeObj) exhaust(meshOf(foeShip), foeObj, 1.4)
+  if (pose.point > 0) {
+    const at = project(me.pos, cam)
+    if (at) {
+      add(at[0], at[1], [0.85, 0.95, 1], pose.point * 5)
+      ray(at[0] - 4, at[1], at[0] + 4, at[1], [0.65, 0.85, 1], pose.point, pose.point)
+    }
+  }
 
   // ── 6. оружие ──
   const bolts: Bolt[] = []
@@ -447,7 +525,7 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
     const H = enemyPath(k, HIT, reach).pos
     const gunAt = (i: number, tt: number) => {
       const g = myMesh.guns[i % myMesh.guns.length]!
-      return toWorld(g, { ...me, roll: Math.sin((w0 + tt) / 1300) * 0.2 })
+      return toWorld(g, flightAt(w0 + tt, fight))
     }
     // свои залпы: первые мимо, последний в цель (если волна без торпеды)
     const shots = torpedo ? [1_350, 1_650, 2_000] : [1_350, 1_650, 2_000, 2_400]
@@ -649,9 +727,9 @@ export function frame(t: number, columns: number, ship: Ship, camMode: CamMode =
 
   // ── 8. вспышки прыжка: вход и выход заливают кадр белым ──
   let white = 0
-  if (p >= STRETCH && p < FLASH + 250) white = p < FLASH ? ease((p - STRETCH) / (FLASH - STRETCH)) : 1 - ease((p - FLASH) / 250)
-  else if (p >= EXIT - 300 && p < EXIT + 350) white = p < EXIT ? ease((p - EXIT + 300) / 300) : 1 - ease((p - EXIT) / 350)
-  if (white > 0) for (let i = 0; i < N * 3; i++) rgb[i] = lerp(rgb[i]!, 1.4, white)
+  if (p >= FLASH - 50 && p < FLASH + 180) white = p < FLASH ? ease((p - FLASH + 50) / 50) : 1 - ease((p - FLASH) / 180)
+  else if (p >= EXIT - 80 && p < EXIT + 160) white = p < EXIT ? ease((p - EXIT + 80) / 80) : 1 - ease((p - EXIT) / 160)
+  if (white > 0) for (let i = 0; i < N * 3; i++) rgb[i] = lerp(rgb[i]!, 2.2, white)
 
   // ── 9. блум и анаморфные блики: яркое расплывается ореолом, огни тянут синие горизонтальные полосы ──
   bloom(rgb, buf.br, buf.tmp, PW, PH)

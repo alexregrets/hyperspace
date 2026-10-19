@@ -5,7 +5,8 @@ a = np.fromfile(raw, np.uint8).reshape(-1, H, W, 3)
 a = a.repeat(8, axis=1).repeat(4, axis=2)        # субпиксель терминала: 4 широкий, 8 высокий
 frames = [Image.fromarray(f) for f in a]
 if out.endswith(".png"):                          # контактный лист: каждый 30-й кадр
-    pick = frames[::30]; sheet = Image.new("RGB", (pick[0].width, pick[0].height * len(pick)))
+    step = int(sys.argv[6]) if len(sys.argv) > 6 else 30
+    pick = frames[::step]; sheet = Image.new("RGB", (pick[0].width, pick[0].height * len(pick)))
     for i, f in enumerate(pick): sheet.paste(f, (0, i * f.height))
     sheet.save(out)
 else:
